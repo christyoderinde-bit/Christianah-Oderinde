@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -56,6 +57,8 @@ class MobileDataChatManager(
     private val _discoveredPeers = MutableStateFlow<List<NearbyUser>>(emptyList())
     val discoveredPeers: StateFlow<List<NearbyUser>> = _discoveredPeers.asStateFlow()
 
+    val okHttpClient: OkHttpClient get() = client
+
     fun isNetworkAvailable(): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
         val active = cm.activeNetwork ?: return false
@@ -70,13 +73,26 @@ class MobileDataChatManager(
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
     }
 
+    fun getNetworkTypeName(): String {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return "Offline"
+        val active = cm.activeNetwork ?: return "Offline"
+        val caps = cm.getNetworkCapabilities(active) ?: return "Offline"
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "4G LTE / Cellular"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi Internet"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "Active Internet"
+            else -> "Offline"
+        }
+    }
+
     fun connect(username: String, room: String = GLOBAL_TOPIC) {
         currentUsername = username
         currentRoom = room.ifBlank { GLOBAL_TOPIC }
 
         disconnect()
 
-        onConnectionStateChanged(ConnectionState.Connecting(TransportType.MOBILE_DATA, "Long Range Relay ($currentRoom)"))
+        onConnectionStateChanged(ConnectionState.Connecting(TransportType.MOBILE_DATA, "4G / Internet Relay ($currentRoom)"))
         _isMobileDataActive.value = true
 
         val request = Request.Builder()
@@ -87,7 +103,7 @@ class MobileDataChatManager(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket open to $currentRoom")
                 _isConnected.value = true
-                val netType = if (isUsingCellular()) "Cellular / 5G" else "Internet Relay"
+                val netType = getNetworkTypeName()
                 onConnectionStateChanged(
                     ConnectionState.Connected(
                         transport = TransportType.MOBILE_DATA,
@@ -127,7 +143,37 @@ class MobileDataChatManager(
     private fun handleIncomingRaw(jsonString: String) {
         try {
             val root = JSONObject(jsonString)
-            // ntfy format wraps message in {"event":"message", "message":"...", "topic":"..."}
+            // 1. Check if ntfy attachment is present
+            val attachment = root.optJSONObject("attachment")
+            if (attachment != null) {
+                val fileUrl = attachment.optString("url", "")
+                val fileName = attachment.optString("name", "attachment")
+                val fileSize = attachment.optLong("size", 0L)
+                val mimeType = attachment.optString("type", "application/octet-stream")
+                val title = root.optString("title", "")
+                val sender = if (title.startsWith("File from ")) {
+                    title.removePrefix("File from ").trim()
+                } else {
+                    root.optString("sender", "Peer")
+                }
+
+                if (!sender.equals(currentUsername, ignoreCase = true)) {
+                    val wireMsg = WireMessage(
+                        type = WireMessage.TYPE_FILE,
+                        sender = sender,
+                        text = "Shared file: $fileName",
+                        timestamp = root.optLong("time", System.currentTimeMillis() / 1000) * 1000L,
+                        fileName = fileName,
+                        fileSize = fileSize,
+                        fileMimeType = mimeType,
+                        fileUrl = fileUrl
+                    )
+                    onMessageReceived(wireMsg)
+                    return
+                }
+            }
+
+            // 2. Parse as standard WireMessage JSON
             val rawMsg = root.optString("message", jsonString)
             val wireMsg = WireMessage.fromJson(rawMsg) ?: return
 
@@ -149,17 +195,17 @@ class MobileDataChatManager(
                     displayName = cleanSender.removePrefix("@"),
                     transport = TransportType.MOBILE_DATA,
                     address = "cell:$cleanSender",
-                    proximityDescription = "Long-Range (Mobile Data / 5G)",
+                    proximityDescription = "4G / Internet Relay",
                     signalStrength = (75..98).random(),
                     isOnline = true,
-                    statusText = wireMsg.text.ifBlank { "Active via Cellular" },
+                    statusText = wireMsg.text.ifBlank { "Active via Internet" },
                     radarAngle = (cleanSender.hashCode().rem(360) + 360) % 360f,
                     radarDistance = 0.65f + ((cleanSender.length % 4) * 0.08f)
                 )
                 _remotePeers[cleanSender] = user
                 updateDiscoveredPeers()
             } else {
-                // Chat or Buzz message
+                // Chat, File, or Buzz message
                 onMessageReceived(wireMsg)
             }
         } catch (e: Exception) {
@@ -180,10 +226,11 @@ class MobileDataChatManager(
     fun broadcastPresence() {
         if (currentUsername.isBlank()) return
         scope.launch(Dispatchers.IO) {
+            val netType = getNetworkTypeName()
             val presenceMsg = WireMessage(
                 type = WireMessage.TYPE_PRESENCE,
                 sender = currentUsername,
-                text = if (isUsingCellular()) "Connected on 5G / Cellular" else "Online on Cloud Relay",
+                text = "Online via $netType",
                 timestamp = System.currentTimeMillis()
             )
             publishToRelay(presenceMsg)
@@ -192,6 +239,60 @@ class MobileDataChatManager(
 
     suspend fun sendMessage(wireMsg: WireMessage): Boolean {
         return publishToRelay(wireMsg)
+    }
+
+    suspend fun uploadAndSendFile(
+        fileBytes: ByteArray,
+        fileName: String,
+        mimeType: String,
+        senderName: String
+    ): WireMessage? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        try {
+            val mediaType = (try {
+                mimeType.toMediaTypeOrNull()
+            } catch (_: Exception) {
+                null
+            }) ?: "application/octet-stream".toMediaType()
+
+            val requestBody = fileBytes.toRequestBody(mediaType)
+            val request = Request.Builder()
+                .url("$RELAY_BASE_HTTP/$currentRoom")
+                .put(requestBody)
+                .header("Filename", fileName)
+                .header("Title", "File from $senderName")
+                .header("X-Sender", senderName)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val bodyString = response.body?.string() ?: ""
+                    val respObj = if (bodyString.isNotBlank()) JSONObject(bodyString) else JSONObject()
+                    val attachment = respObj.optJSONObject("attachment")
+                    val fileUrl = attachment?.optString("url") ?: "$RELAY_BASE_HTTP/$currentRoom/file/${respObj.optString("id")}"
+
+                    val wireMsg = WireMessage(
+                        type = WireMessage.TYPE_FILE,
+                        sender = senderName,
+                        text = "Shared file: $fileName",
+                        timestamp = System.currentTimeMillis(),
+                        fileName = fileName,
+                        fileSize = fileBytes.size.toLong(),
+                        fileMimeType = mimeType,
+                        fileUrl = fileUrl
+                    )
+
+                    // Also broadcast the wire message explicitly so all listeners get it reliably
+                    publishToRelay(wireMsg)
+                    wireMsg
+                } else {
+                    Log.e(TAG, "File upload failed with code: ${response.code}")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed uploading file: ${e.message}", e)
+            null
+        }
     }
 
     private fun publishToRelay(wireMsg: WireMessage): Boolean {

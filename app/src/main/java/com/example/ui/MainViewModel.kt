@@ -2,10 +2,12 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.util.Base64
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -18,6 +20,9 @@ import com.example.network.NearbyUser
 import com.example.network.TransportType
 import com.example.network.UnifiedConnectionManager
 import com.example.network.WireMessage
+import com.example.util.FileHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -27,6 +32,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 private const val TAG = "MainViewModel"
 private const val PREFS_NAME = "nearby_chat_prefs"
@@ -62,6 +69,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Buzz trigger event for UI animation & vibration
     private val _buzzEvent = MutableSharedFlow<String>()
     val buzzEvent: SharedFlow<String> = _buzzEvent.asSharedFlow()
+
+    // File Sharing state
+    val isSendingFile = MutableStateFlow(false)
+    val fileTransferStatus = MutableStateFlow<String?>(null)
 
     init {
         val database = AppDatabase.getDatabase(application)
@@ -257,6 +268,173 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 repository.insertMessage(entity)
                 vibrateDevice(500)
                 _buzzEvent.emit(wireMsg.sender)
+            }
+            WireMessage.TYPE_FILE -> {
+                val app = getApplication<Application>()
+                var localPath: String? = null
+
+                // If base64 payload is attached directly (Bluetooth, Wi-Fi Direct, Hotspot)
+                if (wireMsg.fileData.isNotBlank()) {
+                    try {
+                        val bytes = Base64.decode(wireMsg.fileData, Base64.DEFAULT)
+                        val saved = FileHelper.saveIncomingBytes(app, wireMsg.fileName, bytes)
+                        localPath = saved?.absolutePath
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to decode base64 file data: ${e.message}")
+                    }
+                }
+
+                val entity = ChatMessageEntity(
+                    senderName = wireMsg.sender,
+                    isFromMe = false,
+                    content = if (wireMsg.text.isNotBlank()) wireMsg.text else "Shared file: ${wireMsg.fileName}",
+                    timestamp = wireMsg.timestamp,
+                    transportType = transport.name,
+                    peerName = wireMsg.sender,
+                    isBuzz = false,
+                    isFile = true,
+                    fileName = wireMsg.fileName,
+                    fileSize = wireMsg.fileSize,
+                    fileMimeType = wireMsg.fileMimeType,
+                    filePath = localPath,
+                    fileUrl = wireMsg.fileUrl.ifBlank { null }
+                )
+                val newMsgId = repository.insertMessage(entity)
+                vibrateDevice(100)
+
+                // If fileUrl is provided (e.g. via 4G/Internet relay) but not yet downloaded, auto-download in background
+                if (localPath == null && wireMsg.fileUrl.isNotBlank()) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        val downloaded = FileHelper.downloadRemoteFile(
+                            context = app,
+                            fileUrl = wireMsg.fileUrl,
+                            fileName = wireMsg.fileName,
+                            client = connectionManager.mobileDataManager.okHttpClient
+                        )
+                        if (downloaded != null) {
+                            repository.updateMessage(
+                                entity.copy(id = newMsgId, filePath = downloaded.absolutePath)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun sendFile(uri: Uri) {
+        val app = getApplication<Application>()
+        val state = connectionState.value
+        if (state !is ConnectionState.Connected) {
+            fileTransferStatus.value = "Connect a peer to share files"
+            viewModelScope.launch {
+                delay(2500)
+                fileTransferStatus.value = null
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            isSendingFile.value = true
+            fileTransferStatus.value = "Preparing file..."
+            try {
+                val (name, size) = FileHelper.getFileInfoFromUri(app, uri)
+                val mime = FileHelper.getMimeType(app, uri, name)
+
+                val bytes = withContext(Dispatchers.IO) {
+                    app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }
+
+                if (bytes == null || bytes.isEmpty()) {
+                    fileTransferStatus.value = "Unable to read file"
+                    delay(2500)
+                    isSendingFile.value = false
+                    fileTransferStatus.value = null
+                    return@launch
+                }
+
+                if (bytes.size > 25 * 1024 * 1024) {
+                    fileTransferStatus.value = "File too large (max 25MB)"
+                    delay(2500)
+                    isSendingFile.value = false
+                    fileTransferStatus.value = null
+                    return@launch
+                }
+
+                // Copy to local sent cache
+                val localSentFile = FileHelper.copyUriToSentFolder(app, uri, name)
+
+                fileTransferStatus.value = "Sending $name (${FileHelper.formatFileSize(bytes.size.toLong())})..."
+
+                val (success, wireMsg) = connectionManager.sendFile(
+                    fileBytes = bytes,
+                    fileName = name,
+                    mimeType = mime,
+                    senderName = userNickname.value
+                )
+
+                if (success) {
+                    val peerName = state.peerName
+                    val transport = state.transport
+                    val entity = ChatMessageEntity(
+                        senderName = userNickname.value,
+                        isFromMe = true,
+                        content = "Shared file: $name",
+                        timestamp = System.currentTimeMillis(),
+                        transportType = transport.name,
+                        peerName = peerName,
+                        isBuzz = false,
+                        isFile = true,
+                        fileName = name,
+                        fileSize = bytes.size.toLong(),
+                        fileMimeType = mime,
+                        filePath = localSentFile?.absolutePath,
+                        fileUrl = wireMsg?.fileUrl?.ifBlank { null }
+                    )
+                    repository.insertMessage(entity)
+                    fileTransferStatus.value = "Sent successfully!"
+                } else {
+                    fileTransferStatus.value = "Failed to send file"
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed sending file: ${e.message}", e)
+                fileTransferStatus.value = "Error: ${e.localizedMessage ?: "Failed"}"
+            } finally {
+                delay(2000)
+                isSendingFile.value = false
+                fileTransferStatus.value = null
+            }
+        }
+    }
+
+    fun downloadAndOpenFile(message: ChatMessageEntity) {
+        val app = getApplication<Application>()
+        if (message.filePath != null) {
+            val file = File(message.filePath)
+            if (file.exists()) {
+                FileHelper.openFile(app, file, message.fileMimeType)
+                return
+            }
+        }
+
+        if (!message.fileUrl.isNullOrBlank()) {
+            viewModelScope.launch {
+                fileTransferStatus.value = "Downloading ${message.fileName ?: "file"}..."
+                val downloaded = FileHelper.downloadRemoteFile(
+                    context = app,
+                    fileUrl = message.fileUrl,
+                    fileName = message.fileName ?: "attachment",
+                    client = connectionManager.mobileDataManager.okHttpClient
+                )
+                if (downloaded != null) {
+                    repository.updateMessage(message.copy(filePath = downloaded.absolutePath))
+                    fileTransferStatus.value = "Downloaded!"
+                    FileHelper.openFile(app, downloaded, message.fileMimeType)
+                } else {
+                    fileTransferStatus.value = "Download failed"
+                }
+                delay(2000)
+                fileTransferStatus.value = null
             }
         }
     }

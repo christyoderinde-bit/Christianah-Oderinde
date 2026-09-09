@@ -17,6 +17,9 @@ interface ChatMessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessageEntity): Long
 
+    @androidx.room.Update
+    suspend fun updateMessage(message: ChatMessageEntity)
+
     @Query("DELETE FROM chat_messages WHERE id = :id")
     suspend fun deleteMessage(id: Long)
 

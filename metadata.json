@@ -1,6 +1,6 @@
 {
   "name": "Nearby Chat",
-  "description": "Nearby P2P & Long-Range messaging via Bluetooth, Wi-Fi Direct, Local Hotspot, and Mobile Data with username identification and iOS-style liquid glass design.",
+  "description": "Nearby P2P & Long-Range messaging and file sharing via Bluetooth, Wi-Fi Direct, Local Hotspot, and 4G/Internet relay with username identification and liquid glass design.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

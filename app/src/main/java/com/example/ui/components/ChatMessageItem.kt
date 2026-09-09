@@ -3,23 +3,35 @@ package com.example.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.Icon
@@ -35,16 +47,22 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.ChatMessageEntity
 import com.example.network.TransportType
 import com.example.ui.theme.BluetoothColor
 import com.example.ui.theme.HotspotColor
 import com.example.ui.theme.MobileDataColor
 import com.example.ui.theme.WifiDirectColor
+import com.example.util.FileHelper
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -52,10 +70,12 @@ import java.util.Locale
 @Composable
 fun ChatMessageItem(
     message: ChatMessageEntity,
+    onOpenFile: (ChatMessageEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isMe = message.isFromMe
     val isBuzz = message.isBuzz
+    val isFile = message.isFile
     val isDark = isSystemInDarkTheme()
 
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
@@ -229,6 +249,84 @@ fun ChatMessageItem(
                             )
                         )
                     }
+                } else if (isFile) {
+                    // File / Image Attachment layout
+                    val isImage = (message.fileMimeType?.startsWith("image/") == true) ||
+                            (message.fileName?.matches(Regex("(?i).*\\.(png|jpe?g|webp|gif)$")) == true)
+
+                    if (isImage) {
+                        val imageModel = message.filePath?.let { File(it) } ?: message.fileUrl
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 120.dp, max = 200.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.Black.copy(alpha = 0.15f))
+                                .clickable { onOpenFile(message) }
+                        ) {
+                            AsyncImage(
+                                model = imageModel,
+                                contentDescription = message.fileName ?: "Photo attachment",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+
+                    // File info row
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isMe) Color.White.copy(alpha = 0.16f) else Color(0x15007AFF))
+                            .border(1.dp, Color.White.copy(alpha = if (isMe) 0.30f else 0.18f), RoundedCornerShape(12.dp))
+                            .clickable { onOpenFile(message) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isMe) Color.White.copy(alpha = 0.22f) else Color(0xFF007AFF).copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = resolveFileIcon(message.fileName, message.fileMimeType),
+                                contentDescription = null,
+                                tint = if (isMe) Color.White else Color(0xFF007AFF),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = message.fileName ?: "Attachment",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = textColor
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = FileHelper.formatFileSize(message.fileSize),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = if (isMe) Color.White.copy(alpha = 0.8f) else textColor.copy(alpha = 0.65f),
+                                    fontSize = 10.sp
+                                )
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = if (message.filePath != null) Icons.Default.OpenInNew else Icons.Default.Download,
+                            contentDescription = "Open file",
+                            tint = if (isMe) Color.White.copy(alpha = 0.85f) else Color(0xFF007AFF),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
                 } else {
                     Text(
                         text = message.content,
@@ -264,6 +362,21 @@ fun ChatMessageItem(
                 }
             }
         }
+    }
+}
+
+private fun resolveFileIcon(fileName: String?, mimeType: String?): ImageVector {
+    val name = fileName?.lowercase() ?: ""
+    val mime = mimeType?.lowercase() ?: ""
+
+    return when {
+        mime.startsWith("image/") || name.endsWith(".jpg") || name.endsWith(".png") || name.endsWith(".webp") || name.endsWith(".gif") -> Icons.Filled.Image
+        mime == "application/pdf" || name.endsWith(".pdf") -> Icons.Filled.PictureAsPdf
+        mime.startsWith("audio/") || name.endsWith(".mp3") || name.endsWith(".wav") || name.endsWith(".m4a") -> Icons.Filled.AudioFile
+        mime.startsWith("video/") || name.endsWith(".mp4") || name.endsWith(".mkv") -> Icons.Filled.VideoFile
+        name.endsWith(".zip") || name.endsWith(".rar") || name.endsWith(".7z") || name.endsWith(".tar") -> Icons.Filled.FolderZip
+        mime.startsWith("text/") || name.endsWith(".txt") || name.endsWith(".doc") || name.endsWith(".docx") -> Icons.Filled.Description
+        else -> Icons.Filled.InsertDriveFile
     }
 }
 

@@ -6,8 +6,8 @@ import java.util.UUID
 enum class TransportType(val displayName: String) {
     BLUETOOTH("Bluetooth"),
     WIFI_DIRECT("Wi-Fi Direct"),
-    HOTSPOT("Hotspot / Wi-Fi"),
-    MOBILE_DATA("Mobile Data (5G)")
+    HOTSPOT("Hotspot LAN"),
+    MOBILE_DATA("4G / Internet")
 }
 
 sealed interface ConnectionState {
@@ -37,11 +37,17 @@ data class WireMessage(
     val sender: String,
     val text: String,
     val target: String = "",
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val fileName: String = "",
+    val fileSize: Long = 0L,
+    val fileMimeType: String = "",
+    val fileData: String = "",
+    val fileUrl: String = ""
 ) {
     companion object {
         const val TYPE_CHAT = "CHAT"
         const val TYPE_BUZZ = "BUZZ"
+        const val TYPE_FILE = "FILE"
         const val TYPE_HANDSHAKE = "HANDSHAKE"
         const val TYPE_ACK = "ACK"
         const val TYPE_PRESENCE = "PRESENCE"
@@ -55,7 +61,12 @@ data class WireMessage(
                     sender = obj.optString("sender", "Unknown"),
                     text = obj.optString("text", ""),
                     target = obj.optString("target", ""),
-                    timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                    timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                    fileName = obj.optString("fileName", ""),
+                    fileSize = obj.optLong("fileSize", 0L),
+                    fileMimeType = obj.optString("fileMimeType", ""),
+                    fileData = obj.optString("fileData", ""),
+                    fileUrl = obj.optString("fileUrl", "")
                 )
             } catch (e: Exception) {
                 null
@@ -71,6 +82,11 @@ data class WireMessage(
         obj.put("text", text)
         obj.put("target", target)
         obj.put("timestamp", timestamp)
+        if (fileName.isNotEmpty()) obj.put("fileName", fileName)
+        if (fileSize > 0) obj.put("fileSize", fileSize)
+        if (fileMimeType.isNotEmpty()) obj.put("fileMimeType", fileMimeType)
+        if (fileData.isNotEmpty()) obj.put("fileData", fileData)
+        if (fileUrl.isNotEmpty()) obj.put("fileUrl", fileUrl)
         return obj.toString()
     }
 }

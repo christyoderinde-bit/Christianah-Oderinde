@@ -115,6 +115,45 @@ class UnifiedConnectionManager(
         }
     }
 
+    suspend fun sendFile(
+        fileBytes: ByteArray,
+        fileName: String,
+        mimeType: String,
+        senderName: String
+    ): Pair<Boolean, WireMessage?> {
+        val state = _connectionState.value
+        if (state !is ConnectionState.Connected) return Pair(false, null)
+
+        return when (state.transport) {
+            TransportType.MOBILE_DATA -> {
+                val wireMsg = mobileDataManager.uploadAndSendFile(fileBytes, fileName, mimeType, senderName)
+                Pair(wireMsg != null, wireMsg)
+            }
+            TransportType.BLUETOOTH,
+            TransportType.WIFI_DIRECT,
+            TransportType.HOTSPOT -> {
+                val base64Data = android.util.Base64.encodeToString(fileBytes, android.util.Base64.NO_WRAP)
+                val wireMsg = WireMessage(
+                    type = WireMessage.TYPE_FILE,
+                    sender = senderName,
+                    text = "Shared file: $fileName",
+                    timestamp = System.currentTimeMillis(),
+                    fileName = fileName,
+                    fileSize = fileBytes.size.toLong(),
+                    fileMimeType = mimeType,
+                    fileData = base64Data
+                )
+                val success = when (state.transport) {
+                    TransportType.BLUETOOTH -> bluetoothManager.sendMessage(wireMsg)
+                    TransportType.WIFI_DIRECT -> wifiDirectManager.sendMessage(wireMsg)
+                    TransportType.HOTSPOT -> hotspotManager.sendMessage(wireMsg)
+                    else -> false
+                }
+                Pair(success, if (success) wireMsg else null)
+            }
+        }
+    }
+
     suspend fun sendBuzz(senderName: String): Boolean {
         val state = _connectionState.value
         if (state !is ConnectionState.Connected) return false

@@ -121,7 +121,7 @@ fun MobileDataTab(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = "Mobile Data / 5G Relay",
+                                    text = "4G LTE / 5G & Internet Mesh",
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 17.sp
@@ -129,7 +129,7 @@ fun MobileDataTab(
                                     color = if (isDark) Color.White else Color(0xFF0F172A)
                                 )
                                 Text(
-                                    text = if (isCellular) "Cellular network detected" else "Internet relay active",
+                                    text = if (isCellular) "4G / Cellular data active" else "Any Internet connection active",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (isDark) Color.White.copy(alpha = 0.7f) else Color(0xFF64748B)
                                 )
@@ -174,7 +174,7 @@ fun MobileDataTab(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (isConnected) "Relay Online: Global Mesh Active" else "Enable toggle to connect over cellular",
+                            text = if (isConnected) "Relay Online: 4G/Internet Mesh Active • File Sharing Enabled" else "Enable toggle to connect over 4G / any internet",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 11.sp

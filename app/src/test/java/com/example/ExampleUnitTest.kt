@@ -59,8 +59,29 @@ class ExampleUnitTest {
     fun testTransportTypes() {
         assertEquals("Bluetooth", TransportType.BLUETOOTH.displayName)
         assertEquals("Wi-Fi Direct", TransportType.WIFI_DIRECT.displayName)
-        assertEquals("Hotspot / Wi-Fi", TransportType.HOTSPOT.displayName)
-        assertTrue(TransportType.MOBILE_DATA.displayName.contains("Mobile Data"))
+        assertEquals("Hotspot LAN", TransportType.HOTSPOT.displayName)
+        assertEquals("4G / Internet", TransportType.MOBILE_DATA.displayName)
+    }
+
+    @Test
+    fun testFileMessageSerialization() {
+        val fileMsg = WireMessage(
+            id = "file-123",
+            type = WireMessage.TYPE_FILE,
+            sender = "@user_test",
+            text = "Shared file: invoice.pdf",
+            fileName = "invoice.pdf",
+            fileSize = 102400L,
+            fileMimeType = "application/pdf",
+            fileUrl = "https://ntfy.sh/nearby_chat/file/123"
+        )
+        val json = fileMsg.toJson()
+        val parsed = WireMessage.fromJson(json)
+        assertNotNull(parsed)
+        assertEquals(WireMessage.TYPE_FILE, parsed?.type)
+        assertEquals("invoice.pdf", parsed?.fileName)
+        assertEquals(102400L, parsed?.fileSize)
+        assertEquals("https://ntfy.sh/nearby_chat/file/123", parsed?.fileUrl)
     }
 
     @Test

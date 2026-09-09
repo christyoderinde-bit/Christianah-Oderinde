@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -29,11 +31,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,12 +79,23 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val isSendingFile by viewModel.isSendingFile.collectAsStateWithLifecycle()
+    val fileTransferStatus by viewModel.fileTransferStatus.collectAsStateWithLifecycle()
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
     var buzzSender by remember { mutableStateOf<String?>(null) }
+
+    // File picker launcher
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.sendFile(uri)
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.buzzEvent.collect { sender ->
@@ -166,14 +181,60 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     items(messages, key = { it.id }) { message ->
-                        ChatMessageItem(message = message)
+                        ChatMessageItem(
+                            message = message,
+                            onOpenFile = { viewModel.downloadAndOpenFile(it) }
+                        )
                     }
                 }
             }
         }
 
+        // File transfer status banner
+        AnimatedVisibility(
+            visible = fileTransferStatus != null,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
+                ),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isSendingFile) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.AttachFile,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = fileTransferStatus ?: "",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+
         // Quick Preset Chips in glass styling
-        val presets = listOf("👋 Hi!", "📶 Connected!", "⚡ Buzz!", "📍 Can you hear me?", "✅ Received!")
+        val presets = listOf("👋 Hi!", "📎 Send File", "📶 Connected!", "⚡ Buzz!", "📍 Can you hear me?", "✅ Received!")
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -184,10 +245,10 @@ fun ChatScreen(
             presets.forEach { preset ->
                 AssistChip(
                     onClick = {
-                        if (preset == "⚡ Buzz!") {
-                            viewModel.sendBuzz()
-                        } else {
-                            viewModel.sendMessage(preset)
+                        when (preset) {
+                            "⚡ Buzz!" -> viewModel.sendBuzz()
+                            "📎 Send File" -> filePickerLauncher.launch("*/*")
+                            else -> viewModel.sendMessage(preset)
                         }
                     },
                     label = { Text(preset, fontSize = 11.sp, fontWeight = FontWeight.Medium) },
@@ -223,6 +284,18 @@ fun ChatScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Attach file button
+                IconButton(
+                    onClick = { filePickerLauncher.launch("*/*") },
+                    modifier = Modifier.testTag("btn_attach_file")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.AttachFile,
+                        contentDescription = "Attach File",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+
                 // Buzz button
                 IconButton(
                     onClick = { viewModel.sendBuzz() },
